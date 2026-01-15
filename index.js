@@ -5,6 +5,7 @@ import { MongoClient, ObjectId, ServerApiVersion } from "mongodb";
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken'
 import Stripe from "stripe";
+import cookieParser from "cookie-parser";
 
 dotenv.config();
 
@@ -12,12 +13,17 @@ const app = express();
 const port = process.env.PORT || 8000;
 const uri = process.env.DB;
 const JWT_SECRET = process.env.JWT_SECRET;
-const allowedOrigins = process.env.FRONTENDS.split(",");
+const allowedOrigins = process.env.FRONTENDS
+  ? process.env.FRONTENDS.split(",").map(s => s.trim())
+  : ["http://localhost:5173"];
+
 
 app.use(cors({
-  origin: allowedOrigins ? allowedOrigins : ['http://localhost:5173']
+  origin: allowedOrigins,
+  credentials: true
 }));
 app.use(express.json());
+app.use(cookieParser());
 
 //  DB & collections
 if (!uri) throw new Error("Missing DB env var");
@@ -41,8 +47,8 @@ export function verifyUser(req, res, next) {
     const token = req.cookies?.token;
     if (!token) return res.status(401).json({ message: "Unauthorized: No token" });
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded; 
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
     next();
   } catch (err) {
     return res.status(401).json({ message: "Unauthorized: Invalid or expired token" });
@@ -51,7 +57,7 @@ export function verifyUser(req, res, next) {
 
 export function requireRole(role) {
   return (req, res, next) => {
-    if (role.include(req.user.role)) return res.status(403).json({ message: "Forbidden: Insufficient role" });
+    if (role.includes(req.user.role)) return res.status(403).json({ message: "Forbidden Access" });
     next();
   };
 }
@@ -132,43 +138,43 @@ app.post("/item", async (req, res) => {
 });
 
 app.post("/checkout-session", verifyUser, async (req, res) => {
-    try {
-        const db = await getDB()
-        const user = await db.collection("users").findOne({ email: req?.user?.email }, { projection: { premium: 1 } });
-        if(!user) return res.status(401).json({ message: "Unauthorized Access"});
+  try {
+    const db = await getDB()
+    const user = await db.collection("users").findOne({ email: req?.user?.email }, { projection: { premium: 1 } });
+    if (!user) return res.status(401).json({ message: "Unauthorized Access" });
 
-        const item = await db.collection("items").findOne({ _id: new ObjectId(req.body?.id) });
-        if (!item) return res.send({ url: "" })
+    const item = await db.collection("items").findOne({ _id: new ObjectId(req.body?.id) });
+    if (!item) return res.send({ url: "" })
 
-        const origin = req.headers.origin;
-        const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-        const session = await stripe.checkout.sessions.create({
-            line_items: [
-                {
-                    price_data: {
-                        currency: "BDT",
-                        unit_amount: 100 * 100,
-                        product_data: {
-                            name: item.name
-                        }
-                    },
-                    quantity: req.body?.quantity ?? 1,
-                },
-            ],
-            customer_email: req?.user?.email,
-            metadata: {
-                itemId: req.body?.id,
-                photo: item.photo
-            },
-            mode: 'payment',
-            success_url: `${origin}/after-payment?success=true&type=boost&session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${origin}/after-payment?success=false&type=boost`,
-        });
-        res.send({ success: true, url: session.url });
-    } catch (error) {
-        console.error(error)
-        res.send({ success: false, message: "Something went wrong!", url: "" })
-    }
+    const origin = req.headers.origin;
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+    const session = await stripe.checkout.sessions.create({
+      line_items: [
+        {
+          price_data: {
+            currency: "BDT",
+            unit_amount: 100 * 100,
+            product_data: {
+              name: item.name
+            }
+          },
+          quantity: req.body?.quantity ?? 1,
+        },
+      ],
+      customer_email: req?.user?.email,
+      metadata: {
+        itemId: req.body?.id,
+        photo: item.photo
+      },
+      mode: 'payment',
+      success_url: `${origin}/after-payment?success=true&type=boost&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${origin}/after-payment?success=false&type=boost`,
+    });
+    res.send({ success: true, url: session.url });
+  } catch (error) {
+    console.error(error)
+    res.send({ success: false, message: "Something went wrong!", url: "" })
+  }
 })
 
 app.listen(port, () => console.log(`Server listening on Port - ${port}`))

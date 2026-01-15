@@ -7,6 +7,7 @@ import jwt from 'jsonwebtoken'
 import Stripe from "stripe";
 
 dotenv.config();
+
 const app = express();
 const port = process.env.PORT || 8000;
 const uri = process.env.DB;
@@ -18,21 +19,21 @@ app.use(cors({
 }));
 app.use(express.json());
 
+//  DB & collections
+if (!uri) throw new Error("Missing DB env var");
+
 const client = new MongoClient(uri, {
-  serverApi: {
-    version: ServerApiVersion.v1,
-    strict: true,
-    deprecationErrors: true,
-  },
+  serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true },
 });
 
-//  listeners
-client.connect()
-  .then(() => app.listen(port, () => console.log(`Server listening ${port} and successfully connected with DB.`)))
-  .catch((err) => console.log(err))
-
-//  DB & collections
-const db = client.db("e-com");
+let db;
+async function getDB() {
+  if (!db) {
+    await client.connect();
+    db = client.db("e-com");
+  }
+  return db;
+}
 
 //  Middleware
 export function verifyUser(req, res, next) {
@@ -70,7 +71,7 @@ app.post("/login", async (req, res) => {
 
     const token = jwt.sign(
       { id: user._id.toString(), email: user.email, role: user.role },
-      process.env.JWT_SECRET,
+      JWT_SECRET,
       { expiresIn: "1d" }
     );
 
@@ -164,3 +165,5 @@ app.post("/checkout-session", verifyUser, async (req, res) => {
         res.send({ success: false, message: "Something went wrong!", url: "" })
     }
 })
+
+app.listen(port, () => console.log(`Server listening on Port - ${port}`))

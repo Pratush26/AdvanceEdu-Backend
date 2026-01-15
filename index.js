@@ -2,36 +2,95 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { MongoClient, ObjectId, ServerApiVersion } from "mongodb";
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken'
 import Stripe from "stripe";
 
 dotenv.config();
 const app = express();
 const port = process.env.PORT || 8000;
 const uri = process.env.DB;
+const JWT_SECRET = process.env.JWT_SECRET;
 const allowedOrigins = process.env.FRONTENDS.split(",");
 
 app.use(cors({
-    origin: allowedOrigins ? allowedOrigins : ['http://localhost:5173']
+  origin: allowedOrigins ? allowedOrigins : ['http://localhost:5173']
 }));
 app.use(express.json());
 
 const client = new MongoClient(uri, {
-    serverApi: {
-        version: ServerApiVersion.v1,
-        strict: true,
-        deprecationErrors: true,
-    },
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  },
 });
 
 //  listeners
 client.connect()
-    .then(() => app.listen(port, () => console.log(`Server listening ${port} and successfully connected with DB.`)))
-    .catch((err) => console.log(err))
+  .then(() => app.listen(port, () => console.log(`Server listening ${port} and successfully connected with DB.`)))
+  .catch((err) => console.log(err))
 
 //  DB & collections
-const database = client.db("e-com");
+const db = client.db("e-com");
 
 //  Middleware
 
 //  Public Api
 app.get("/", async (req, res) => res.send("Server is getting!"))
+app.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ message: "Email and password are required" });
+
+    const user = await db.collection("users").findOne({ email });
+    if (!user) return res.status(401).json({ message: "Invalid credentials" });
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) return res.status(403).json({ message: "Invalid email or password" });
+
+    const token = jwt.sign(
+      { id: user._id.toString(), email: user.email, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
+    res.cookie("token", token, {
+      httpOnly: true,
+      path: "/",
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      maxAge: 1000 * 60 * 60 * 24,
+    });
+
+    return res.status(200).json({
+      message: "Login successful",
+      user: {
+        id: user._id.toString(),
+        username: user.username,
+        email: user.email,
+        role: user.role,
+      },
+    });
+  } catch (err) {
+    console.error("user login error", err);
+    return res.status(500).json({ message: "Internal Server Error!" });
+  }
+});
+app.post("/register", async (req, res) => {
+  try {
+    const { email, password, name, phone } = req.body;
+    if (!email || !password || !name || !phone) return res.status(400).json({ message: "credentials missing" });
+
+    const exists = await db.collection("users").findOne({ email });
+    if (!!exists) return res.status(409).json({ message: "User already exists" });
+
+    const hashedPassword = await bcrypt.hash(String(password), 10);
+    const user = await db.collection("users").insertOne({ email, password: hashedPassword, name, phone, role: "user", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+
+    return res.status(200).json(user);
+  } catch (err) {
+    console.error("user login error", err);
+    return res.status(500).json({ message: "Internal Server Error!" });
+  }
+});

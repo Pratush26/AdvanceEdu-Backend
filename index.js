@@ -63,6 +63,7 @@ app.post("/login", async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ message: "Email and password are required" });
 
+    const db = await getDB()
     const user = await db.collection("users").findOne({ email });
     if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
@@ -102,6 +103,7 @@ app.post("/register", async (req, res) => {
     const { email, password, name, phone } = req.body;
     if (!email || !password || !name || !phone) return res.status(400).json({ message: "credentials missing" });
 
+    const db = await getDB()
     const exists = await db.collection("users").findOne({ email });
     if (!!exists) return res.status(409).json({ message: "User already exists" });
 
@@ -119,6 +121,7 @@ app.post("/item", async (req, res) => {
     const { name, description, photo, price, quantity } = req.body;
     if (!price || !name) return res.status(400).json({ message: "credentials missing" });
 
+    const db = await getDB()
     const item = await db.collection("items").insertOne({ name, description, photo, price, quantity, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 
     return res.status(200).json(item);
@@ -130,7 +133,9 @@ app.post("/item", async (req, res) => {
 
 app.post("/checkout-session", verifyUser, async (req, res) => {
     try {
+        const db = await getDB()
         const user = await db.collection("users").findOne({ email: req?.user?.email }, { projection: { premium: 1 } });
+        if(!user) return res.status(401).json({ message: "Unauthorized Access"});
 
         const item = await db.collection("items").findOne({ _id: new ObjectId(req.body?.id) });
         if (!item) return res.send({ url: "" })

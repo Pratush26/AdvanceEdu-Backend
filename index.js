@@ -35,6 +35,25 @@ client.connect()
 const db = client.db("e-com");
 
 //  Middleware
+export function verifyUser(req, res, next) {
+  try {
+    const token = req.cookies?.token;
+    if (!token) return res.status(401).json({ message: "Unauthorized: No token" });
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded; 
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: "Unauthorized: Invalid or expired token" });
+  }
+}
+
+export function requireRole(role) {
+  return (req, res, next) => {
+    if (role.include(req.user.role)) return res.status(403).json({ message: "Forbidden: Insufficient role" });
+    next();
+  };
+}
 
 //  Public Api
 app.get("/", async (req, res) => res.send("Server is getting!"))
@@ -86,7 +105,7 @@ app.post("/register", async (req, res) => {
     if (!!exists) return res.status(409).json({ message: "User already exists" });
 
     const hashedPassword = await bcrypt.hash(String(password), 10);
-    const user = await db.collection("users").insertOne({ email, password: hashedPassword, name, phone, role: "user", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    const user = await db.collection("users").insertOne({ email, password: hashedPassword, name, phone, role: "user", premium: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 
     return res.status(200).json(user);
   } catch (err) {
@@ -94,3 +113,54 @@ app.post("/register", async (req, res) => {
     return res.status(500).json({ message: "Internal Server Error!" });
   }
 });
+app.post("/item", async (req, res) => {
+  try {
+    const { name, description, photo, price, quantity } = req.body;
+    if (!price || !name) return res.status(400).json({ message: "credentials missing" });
+
+    const item = await db.collection("items").insertOne({ name, description, photo, price, quantity, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+
+    return res.status(200).json(item);
+  } catch (err) {
+    console.error("user login error", err);
+    return res.status(500).json({ message: "Internal Server Error!" });
+  }
+});
+
+app.post("/checkout-session", verifyUser, async (req, res) => {
+    try {
+        const user = await db.collection("users").findOne({ email: req?.user?.email }, { projection: { premium: 1 } });
+
+        const item = await db.collection("items").findOne({ _id: new ObjectId(req.body?.id) });
+        if (!item) return res.send({ url: "" })
+
+        const origin = req.headers.origin;
+        const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+        const session = await stripe.checkout.sessions.create({
+            line_items: [
+                {
+                    price_data: {
+                        currency: "BDT",
+                        unit_amount: 100 * 100,
+                        product_data: {
+                            name: item.name
+                        }
+                    },
+                    quantity: req.body?.quantity ?? 1,
+                },
+            ],
+            customer_email: req?.user?.email,
+            metadata: {
+                itemId: req.body?.id,
+                photo: item.photo
+            },
+            mode: 'payment',
+            success_url: `${origin}/after-payment?success=true&type=boost&session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${origin}/after-payment?success=false&type=boost`,
+        });
+        res.send({ success: true, url: session.url });
+    } catch (error) {
+        console.error(error)
+        res.send({ success: false, message: "Something went wrong!", url: "" })
+    }
+})
